@@ -1,0 +1,376 @@
+---
+title: "AssignmentThreeFinal"
+author: "Adrienne"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+<h1>Examining the relationship of race, income, and commute times</h1>
+<p> I chose to explore the outcome variable of commute times, and put it in conversation with the independent variables of race and household income. Research published in the Open Transportation Journal has found that income is positively correlated with commute time and the National Equity Atlas postulates that people of color face longer commute times. More anecdotally, pieces published in the New York Times and the Atlantic describe the re-concentration of poverty in areas further from jobs, and detail lengthy commutes that often unfairly affect poor minorities. These pieces of information left me wanting to dive in to the possible interactions of household income, race, and commute times in the Bay Area.</p>
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include=FALSE}
+library(tidycensus)
+library(tidyverse)
+library(tigris)
+library(plotly)
+library(sf)
+library(leaflet)
+library(censusapi)
+library(ggplot2)
+library(readxl)
+library(corrplot)
+```
+<h3>Exploring regressions at the household level</h3>
+```{r get PUMS, eval=FALSE}
+census_api_key("c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+pums_vars_2018 <- 
+  pums_variables %>%
+  filter(year == 2018, survey == "acs5")
+
+
+ca_pums <- get_pums(
+  variables = c(
+    "PUMA",
+    "JWMNP",
+    "RAC1P",
+    "HINCP",
+    "JWTR"
+  ),
+  state = "CA",
+  year = 2018,
+  survey = "acs5",
+  recode = T
+)
+
+ca_pums_old<- get_pums(
+  variables = c(
+    "PUMA",
+    "JWMNP",
+    "RAC1P",
+    "HINCP",
+    "JWTR"
+  ),
+  state = "CA",
+  year = 2009,
+  survey = "acs5",
+  recode = T
+)
+
+saveRDS(ca_pums, "ca_pums.rds")
+
+```
+<p> First, I created a data frame to explore race, commute times, and income at the household level using PUMS and took data from 2018. I generated plots to visualize the relationship between income and commute time, and the relationship between commute time and whether or not a household was predominantly white. Then, I conducted simple and multiple regressions and analyze the results below.</p>
+```{r multiple regression PUMS, warning=FALSE, message=FALSE}
+ca_pums <- readRDS("ca_pums.rds")
+
+ca_pumas <-
+  pumas("CA", cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_counties <-
+  counties("CA", cb = T, progress_bar = F) %>%
+  filter(NAME %in% bay_county_names)
+
+bay_pumas <-
+  ca_pumas %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_set_geometry(NULL) %>% 
+  left_join(ca_pumas %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+bay_pums <-
+  ca_pums %>% 
+  filter(PUMA %in% bay_pumas$PUMACE10)
+
+#seting up data - filtered to head of household, and added columns to easily explore the interaction of demographics
+bay_pums_regression <-
+  bay_pums %>% 
+  filter(SPORDER == 1) %>%
+  mutate(
+    white = ifelse(
+      RAC1P_label == "White alone",
+      1,
+      0
+    ),
+     black = ifelse(
+      RAC1P_label == "Black or African American alone",
+      1,
+      0
+    ),
+     asian = ifelse(
+      RAC1P_label == "Asian alone",
+      1,
+      0
+    )
+  )
+
+#explored simple linear regressions
+ggplot(
+  data = bay_pums_regression,
+  aes(
+      x = HINCP,
+      y = JWMNP
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F)+
+  scale_x_continuous(name="Household Income ($)", labels = scales::comma)+
+  ylab("Commute Time (minutes)")
+
+ggplot(
+  data = bay_pums_regression,
+  aes(
+      x = white,
+      y = JWMNP
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  scale_x_continuous(name="White", labels = scales::comma)+
+  ylab("Commute Time (minutes)")
+
+
+model_pums <- lm(JWMNP ~ white, bay_pums_regression, weights = WGTP)
+
+summary(model_pums)
+
+model_pums_2 <- lm(JWMNP ~ HINCP, bay_pums_regression, weights = WGTP)
+
+summary(model_pums_2)
+
+model_pums_3 <- lm(JWMNP ~ white + HINCP, bay_pums_regression, weights = WGTP)
+
+summary(model_pums_3)
+
+mean(bay_pums_regression[["JWMNP"]])
+
+```
+<p>Interestingly, if we look at the graphs, there appears to be a positive correlation between household income and commute times, while the correlation between having a white head of household and commute time appears slightly <i>negatively</i> correlated.</p> The positive correlation between income and commute times is in line with results explained in my literature review. Additionally, given the anecdotal evidence, it also makes sense that whiteness is negatively correlated with commute time, if we imagine that it is predominantly people of color who face long commutes due to migrating centers of employment.</p>
+
+<p> Looking at the multiple regression results, we have calculated an R-Squared value that is a good bit larger than the sum of the simple regression alone, at 3.5%, indicating that our chosen variables explain different pieces of the story. It appears that there statistically significant correlation between whiteness, household income, and commute times. The regression coefficient for white has grown more negative, from -3.07 to -3.51. The coefficient for income grew more positive from 0.0000317 to 0.0000377 (suggesting than an income increase of $31,545 correlates to an extra minute of commute at first, and controlling for being in a white household, the income increase is $26,525 to add one minute of commute), which means the effect size may be small in practical terms. This all suggests that controlling for income, there appears to be a stronger association between white households and commute times.</p>
+
+<p> Though the results are statistically significant correleation of income and race with commute times, I do not believe a causal claim can be made. Controlling for income, white households seem to have shorter commute times, despite the overall positive relationship between commute times and income. It is difficult to tell what drives these results - is it driven by white workers being more able to afford to move to homes near their work? Or perhaps white workers living in areas of with opportunity for high income jobs? Other sources exploring this topic largely interpret findings as correlational,though one source (Dargay and Omeran, 2005) approaches causality by looking only at people who have not changed jobs, thereby narrowing analysis to see how changes in income affect residential location or travel mode.  
+
+<h3>Exploring regressions at the tract level</h3>
+<p>At a broader level, I explore race and commute times, but focus specifically on the percentage of a tract that is white, the percent that have long commutes, and the percent that are below the poverty line. Building on my literature review, I wanted to explore relationships brought up by The Atlantic and The New York Times that examine the idea that poor minorities may be likely to have longer commutes, especially relying on public transportation. I used the census variable for households below poverty, and defined a long commute as one that was longer than 40 minutes.
+```{r multiple regression PUMS - those employed,include = FALSE,warning=FALSE, message=FALSE }
+#set up another data frame removing those not in the labor force
+bay_pums_regression_working <-
+  bay_pums %>%
+  filter(JWTR_label != "N/A (not a worker--not in the labor force, including persons under 16 years; unemployed; employed, with a job but not at work; Armed Forces, with a job but not at work)") %>%
+  mutate(
+    white = ifelse(
+      RAC1P_label == "White alone",
+      1,
+      0
+    ), black = ifelse(
+      RAC1P_label == "Black or African American alone",
+      1,
+      0
+    )
+  )
+
+ggplot(
+  data = bay_pums_regression_working,
+  aes(
+      x = HINCP,
+      y = JWMNP
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F)+
+  scale_x_continuous(name="Household Income ($)", labels = scales::comma)+
+  ylab("Commute Time (minutes)")
+
+ggplot(
+  data = bay_pums_regression_working,
+  aes(
+      x = white,
+      y = JWMNP
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  scale_x_continuous(name="White", labels = scales::comma)+
+  ylab("Commute Time (minutes)")
+
+options(scipen = 999)
+
+model_pums <- lm(JWMNP ~ white, bay_pums_regression_working, weights = WGTP)
+
+summary(model_pums)
+
+model_pums_2 <- lm(JWMNP ~ HINCP, bay_pums_regression_working, weights = WGTP)
+
+summary(model_pums_2)
+
+model_pums_3 <- lm(JWMNP ~ white + HINCP, bay_pums_regression_working, weights = PWGTP)
+
+summary(model_pums_3)
+
+mean(bay_pums_regression_working[["JWMNP"]])
+```
+
+```{r multiple regression tract level, warning = F}
+bay_multiple_tract <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2018,
+    region = "tract:*",
+    regionin = "state:06+county:001,013,041,055,075,081,085,095,097",
+    vars = c(
+      "B19001A_001E",
+      "B19001_001E",
+      "B08303_001E",
+      "B08303_010E",
+      "B08303_011E",
+      "B08303_012E",
+      "B08303_013E",
+      "B17001_002E",
+      "B17001_001E"
+    )
+  )%>% 
+  transmute(
+    tract = paste0(state, county, tract),
+    perc_white = B19001A_001E / B19001_001E,
+    perc_longcommute = (B08303_010E + B08303_011E + B08303_012E + B08303_013E) / B08303_001E,
+    perc_belowpoverty = B17001_002E / B17001_001E
+  ) %>% 
+  filter(
+    !is.na(perc_white), 
+    !is.na(perc_longcommute),
+    !is.na(perc_belowpoverty)
+  )
+
+library(corrplot)
+
+correlationplot <- bay_multiple_tract %>% 
+  select(
+    perc_white, 
+    perc_longcommute,
+    perc_belowpoverty
+  ) %>% 
+  cor()
+
+corrplot(
+  correlationplot, 
+  method = "number",
+  type = "upper"
+)
+
+ggplot(
+  data = bay_multiple_tract,
+  aes(
+      x = perc_belowpoverty,
+      y = perc_longcommute
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F)
+
+ggplot(
+  data = bay_multiple_tract,
+  aes(
+      x = perc_white,
+      y = perc_longcommute
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F)
+
+model_commute_white <- lm(perc_longcommute ~ perc_white, bay_multiple_tract)
+
+summary(model_commute_white)
+
+model_commute_poverty <- lm(perc_longcommute ~ perc_belowpoverty, bay_multiple_tract)
+
+summary(model_commute_poverty)
+
+model_commute_white_poverty <- lm(perc_longcommute ~ perc_white + perc_belowpoverty, bay_multiple_tract)
+
+summary(model_commute_white_poverty)
+```
+<p>At the ecological level, the results show that tracts that are more white seem to have lower percentage of people with long commutes, but this seems negligible due to a low coefficient and low R-Squared value. Another simple regression shows a stronger correlation such that a higher percentage of a tract in poverty is correlated to a lower percentage of people with long commutes. Looking at our multiple regression, the R-Squared increases a good bit, showing that these independent factors are not closely correlated, yet still explains just over 2% of the variation in percentage of a tract with long commutes. Controlling for percentage of people in poverty, percentage of white people in a tract seems to be negatively associated with percentage of people with longer commutes and there is a change in statistical significance from 0.05 to the 0.001 level when poverty level is introduced.</p>
+
+<p>Still, I do not feel comfortable making any causal claim. Though there are significant results, I do not believe there is enough information to determine a direction of the effect. Commute length is somewhat difficult to interpret, as it could be a positive or a negative - to some, a lengthy commute reflects the opportunity to choose to live far from work, while to others, a lengthy commute is a burden brought by circumstances of not being able to live near work, or of not having reasonable transportation options.</p>
+
+<p>Comparing between the household level and ecological results - it appears that places with a higher percentage of people below the poverty line have a lower number of people with long commutes, which tracks with our household level finding that higher incomes are correlated with higher commute times.Further, when controlling for poverty, areas with a higher percentage of white people have shorter commutes (though take this with a grain of salt as the coefficient was very small), which seems to track with our earlier finding that controlling for income, white households seemed to have shorter commutes. </p>
+
+<h3>Looking backward</h3>
+<p>Taking a peek at 2012, we see in the correlation chart that the numbers are nearly the same, though with a correlation between percentage with long commute and percentage white that is almost zero. The coefficients separately relating percentage of whiteness and percentage below the poverty line to percentage of long commute seem to be more negative in 2018, compared to 2012, with percentage of whiteness and percentage with long commute times not being significantly correlated in the simple regression. The multiple regression in 2012, shows that controlling for percentage of the tract below the poverty line, the percentage of whiteness is just statistically significant, at 0.05. This statistical significance will increase to 2018. This past analysis could hint to correlations that are strengthening over time between a tracts racial make up, commute times, and poverty level.</p>
+```{r look back}
+bay_multiple_tract_2012 <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2012,
+    region = "tract:*",
+    regionin = "state:06+county:001,013,041,055,075,081,085,095,097",
+    vars = c(
+      "B19001A_001E",
+      "B19001_001E",
+      "B08303_001E",
+      "B08303_010E",
+      "B08303_011E",
+      "B08303_012E",
+      "B08303_013E",
+      "B17001_002E",
+      "B17001_001E"
+    )
+  )%>% 
+  transmute(
+    tract = paste0(state, county, tract),
+    perc_white_2012 = B19001A_001E / B19001_001E,
+    perc_longcommute_2012 = (B08303_010E + B08303_011E + B08303_012E + B08303_013E) / B08303_001E,
+    perc_belowpoverty_2012 = B17001_002E / B17001_001E
+  ) %>% 
+  filter(
+    !is.na(perc_white_2012), 
+    !is.na(perc_longcommute_2012),
+    !is.na(perc_belowpoverty_2012)
+  )
+
+library(corrplot)
+
+correlationplot_2012 <- bay_multiple_tract_2012 %>% 
+  select(
+    perc_white_2012, 
+    perc_longcommute_2012,
+    perc_belowpoverty_2012
+  ) %>% 
+  cor()
+
+corrplot(
+  correlationplot_2012, 
+  method = "number",
+  type = "upper"
+)
+
+model1_2012 <- lm(perc_longcommute_2012 ~ perc_white_2012, bay_multiple_tract_2012)
+
+summary(model1_2012)
+
+model2 <- lm(perc_longcommute_2012 ~ perc_belowpoverty_2012, bay_multiple_tract_2012)
+
+summary(model2)
+
+model3 <- lm(perc_longcommute_2012 ~ perc_white_2012 + perc_belowpoverty_2012, bay_multiple_tract_2012)
+
+summary(model3)
+```
